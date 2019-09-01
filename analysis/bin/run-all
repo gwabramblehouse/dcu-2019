@@ -1,0 +1,18 @@
+#!/bin/bash
+#############################################################################
+# Home Mobility Monitoring
+#
+# Run all analysis scripts.
+#############################################################################
+
+
+# Analyse features of the head analogue which varied depending on height
+# of GridEye above it.
+./sensor-height-features-process-logs
+./sensor-height-features-analyse
+
+# Analyse variations in scenes captured by GridEye containing only background.
+./grideye-background-variation-analyse
+
+# Analyze how GridEye coverage area varies with height.
+./grideye-coverage-area-analyse

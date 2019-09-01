@@ -1,0 +1,13 @@
+#!/bin/bash
+#############################################################################
+# Home Mobility Monitor
+#
+#############################################################################
+export HMM_HOME=${HMM_HOME:$HOME/hmm}
+export HMM_BIN=${HMM_BIN:-$HMM_HOME/bin}
+report_dir="${HMM_HOME}/var/reports"
+mkdir -p ${report_dir}
+data_file=${HMM_HOME}/var/data/theoretical-area-coverage.csv
+${HMM_BIN}/print-dist-chart.py -i ${data_file} -o ${report_dir}/coverage_area_standing.png  -l "Metres  Squared" -c 1 -t "Coverage area of standing subject"
+${HMM_BIN}/print-dist-chart.py -i ${data_file} -o ${report_dir}/coverage_area_sitting.png  -l "Metres  Squared" -c 2 -t "Coverage area of sitting subject"
+${HMM_BIN}/print-dist-chart.py -i ${data_file} -o ${report_dir}/coverage_area_prone.png  -l "Metres  Squared" -c 3 -t "Coverage area of prone subject"

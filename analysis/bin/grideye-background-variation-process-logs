@@ -1,0 +1,206 @@
+#!/usr/bin/perl
+#############################################################################
+# Home Mobility Monitoring.
+#
+# Process the background data from images containing only background scenes.
+# Generate CSV files of relevant stats.
+# Invoke by supplying a list of data filenames on standard input.
+#############################################################################
+use strict;
+use FileHandle;
+use Data::Dumper qw(Dumper);
+
+my $HMM_HOME=$ENV{'HMM_HOME'};
+my $output_dir="$HMM_HOME/var/data/processed";
+
+my $filename;
+my $fh;
+my $state = "start";
+my $image_index = 0;
+my @images;
+my @p_blank;
+my @p_inc;
+
+my $total = 0;
+my $n = 0;
+
+sub std_dev {
+    my ($average, @values) = @_;
+
+    my $count = scalar @values;
+    my $std_dev_sum = 0;
+    $std_dev_sum += ($_ - $average) ** 2 for @values;
+    return $count ? sqrt($std_dev_sum / $count) : 0;
+}
+
+system "mkdir -p $output_dir";
+
+# Process thermal data image files. Each filename is presented
+# on standard input. Extract the pixel data from each file into an
+# array of images.
+
+while(<STDIN>) {
+    chomp;
+    $filename = $_;
+    if (!($fh = new FileHandle $filename)) {
+        next;
+    }
+    my @pixels=();
+    $state = "start";
+
+    while (<$fh>) {
+        s/[\n\r]+//g;
+        if ($state eq "start") {
+            if (/^# IMAGE/) {
+                $state = "data";
+            }
+        } elsif ($state eq "data") {
+            last unless "$_";
+            my @p = split(" ");
+            push @pixels, @p;
+        }
+    }
+    close $fh;
+    push @images, \@pixels;
+}
+
+
+# Generate stats for individual pixels. For each pixel get min, average, max,
+# standard deviation and range of values. In theory should be very similar
+# across all pixels. Also capture if the trend is for the values for a pixel
+# to rise or fall over time.
+
+my @p_min;
+my @p_max;
+my @p_av;
+my @p_sd;
+
+# Gather stats for each pixel in turn.
+for (my $p = 0; $p < 64; ++$p) {
+    my $min=100;
+    my $max=0;
+    my $total=0;
+    my @pixels;
+
+    # Process data for each image in turn.
+    for (my $i = 0; $i < @images; ++$i) {
+        my $pixel = $images[$i][$p];
+        if (! exists $p_blank[$p]) {
+            $p_blank[$p] = 0;
+            $p_inc[$p] = 0;
+        }
+        if ($i > 0) {
+            my $diff = ($images[$i][$p] - $images[$i-1][$p]);
+
+            if ($diff >= 0.01) {
+                # Mark an increase in value.
+                $p_inc[$p] += 1;
+            } elsif ($diff <= -0.01) {
+                # Mark a decrease in value.
+                $p_inc[$p] -= 1;
+            }
+        }
+        # Work around for the occasional zero pixel value.
+        if (($pixel+0) < 10) { 
+            $pixel = 15.0; 
+            $p_blank[$p] += 1;
+        }
+        if($min > $pixel) { $min = $pixel; }
+        if($max < $pixel) { $max = $pixel; }
+        $total += $pixel;
+        push @pixels, $pixel;
+    }
+    my $av = $total / @images;
+    my $sd = std_dev $av, @pixels;
+#    printf "#%2d min:%2.1f max:%2.1f av:%2.1f sd:%3.1f\n", $p, $min, $max, $av, $sd;
+    push @p_min, $min;
+    push @p_max, $max;
+    push @p_av, $av;
+    push @p_sd, $sd;
+}
+
+# Store per-pixel minimum values.
+my $fh = new FileHandle "> $output_dir/min_pixel.csv";
+for (my $i=0; $i < 64; ++$i) {
+    if (!(($i + 1)  % 8)) {
+        printf $fh "%3.1f\n", $p_min[$i];
+    } else {
+        printf $fh  "%3.1f,", $p_min[$i];
+    }
+}
+close $fh;
+
+# Store per-pixel maximum values.
+my $fh = new FileHandle "> $output_dir/max_pixel.csv";
+for (my $i=0; $i < 64; ++$i) {
+    if (!(($i + 1)  % 8)) {
+        printf $fh "%3.1f\n", $p_max[$i];
+    } else {
+        printf $fh  "%3.1f,", $p_max[$i];
+    }
+}
+close $fh;
+
+# Store per-pixel relative range of values.
+my $fh = new FileHandle "> $output_dir/HMM_REPORT_DIR/diff_pixel.csv";
+for (my $i=0; $i < 64; ++$i) {
+    if (!(($i + 1)  % 8)) {
+        printf $fh "%3.1f\n", $p_max[$i] - $p_min[$i];
+    } else {
+        printf $fh  "%3.1f,", $p_max[$i] - $p_min[$i];
+    }
+}
+close $fh;
+
+
+# Store per-pixel average value stats.
+my $fh = new FileHandle "> $output_dir/av_pixel.csv";
+for (my $i=0; $i < 64; ++$i) {
+    if (!(($i + 1)  % 8)) {
+        printf $fh "%3.1f\n", $p_av[$i];
+    } else {
+        printf $fh  "%3.1f,", $p_av[$i];
+    }
+}
+close $fh;
+
+# Store per-pixel standard deviation stats.
+my $fh = new FileHandle "> $output_dir/sd_pixel.csv";
+for (my $i=0; $i < 64; ++$i) {
+    if (!(($i + 1)  % 8)) {
+        printf $fh "%3.1f\n", $p_sd[$i];
+    } else {
+        printf $fh  "%3.1f,", $p_sd[$i];
+    }
+}
+close $fh;
+
+my $fh = new FileHandle "> $output_dir/trend_pixel.csv";
+my $n = @images;
+for (my $i=0; $i < 64; ++$i) {
+    my $diff = ($images[$n-1][$i] + $images[$n-2][$i] + $images[$n-3][$i] 
+        + $images[$n-4][$i]) - ($images[0][$i] + $images[1][$i] 
+        + $images[2][$i] + $images[3][$i]);
+    printf "trend (%0.1f + %0.1f + %0.1f) - (%0.1f + %0.1f + %0.1f)\n", 
+        $images[$n-1][$i], $images[$n-2][$i], $images[$n-3][$i], 
+        $images[0][$i], $images[1][$i],  $images[2][$i];
+    if (!(($i + 1)  % 8)) {
+        printf $fh "%3.1f\n", $diff;
+    } else {
+        printf $fh  "%3.1f,", $diff;
+    }
+}
+close $fh;
+
+
+# Store details on value increases or decreases.
+my $fh = new FileHandle "> $output_dir/inc_pixel.csv";
+for (my $i=0; $i < 64; ++$i) {
+    if (!(($i + 1)  % 8)) {
+        printf $fh "%3.1f\n", $p_inc[$i];
+    } else {
+        printf $fh  "%3.1f,", $p_inc[$i];
+    }
+}
+close $fh;
+

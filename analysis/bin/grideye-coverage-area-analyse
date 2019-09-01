@@ -1,0 +1,15 @@
+#!/bin/bash
+#############################################################################
+# Home Mobility Monitoring.
+#
+# Generates a chart of area covered by a sensor placed at different heights.
+#############################################################################
+
+export HMM_HOME=${HMM_HOME:-$HOME/hmm}
+bin_dir="${HMM_HOME}/bin"
+input_dir="${HMM_HOME}/var/data/recorded"
+output_dir="${HMM_HOME}/var/data/reports"
+mkdir -p ${output_dir}
+
+${bin_dir}/grideye-coverage-area-plot -i ${input_dir}/measured-area-coverage.csv -o ${output_dir}/measured-area-coverage.png -t "Coverage area for various heights"
+

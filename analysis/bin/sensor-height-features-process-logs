@@ -1,0 +1,162 @@
+#!/usr/bin/perl
+#############################################################################
+# Home Mobility Monitoring
+#
+# Process the background data from images containing only background scenes.
+# Extract basic statistics from images containing only a background scenes
+# gathered over a short time period. In theory should contain minimal
+# variations.  Generate a CSV file of relevant stats.
+# Invoke by supplying a list of data filenames on standard input.
+#############################################################################
+use strict;
+use FileHandle;
+use Data::Dumper qw(Dumper);
+
+my $HMM_HOME=$ENV{'HMM_HOME'};
+my $output_dir="$HMM_HOME/var/data/processed";
+
+my $filename;
+my $fh;
+my $state = "start";
+my $image_index = 0;
+my @images;
+my @heights;
+my @p_blank;
+my @p_inc;
+my @stats;
+my %stats;
+
+my $total = 0;
+my $n = 0;
+
+
+# Calculate the standard deviation.
+sub std_dev {
+    my ($average, @values) = @_;
+
+    my $count = scalar @values;
+    my $std_dev_sum = 0;
+    $std_dev_sum += ($_ - $average) ** 2 for @values;
+
+    return $count ? sqrt($std_dev_sum / $count) : 0;
+}
+
+system "mkdir -p $output_dir";
+
+# Process thermal data image files. Each filename is presented
+# on standard input. Extract the pixel data from each file into an
+# array of images.
+while(<STDIN>) {
+    chomp;
+     $filename = $_;
+     if (!($fh = new FileHandle $filename)) {
+         next;
+     }
+     my @pixels=();
+     my @diffs=();
+     $state = "start";
+
+     my $target_temp =0;
+     my $height = 0;
+
+     while (<$fh>) {
+         s/[\n\r]+//g;
+         s/^\s+//;
+
+         if (/^HEIGHT=(\d+)/) {
+             push @heights, $1;
+             $height = $1;
+         }
+         if (/^TARGET_TEMP=([0-9.]+)/) {
+             $target_temp=$1
+         }
+         if (/^2019\-/) {
+            $state = "pixels";
+            next;
+         }
+         if ($state eq "want_diff") {
+             if (/^diff/) {
+                 $state = "diff";
+             }
+         } elsif ($state eq "diff") {
+             last unless "$_";
+             # Capture the differences (pixel - min-pixel-value).
+             my @p = split(" ");
+             push @diffs, @p;
+         } elsif ($state eq "pixels") {
+             my @p = split(" ");
+             if (@p == 8) {
+                 push @pixels, @p;
+             } else {
+                 $state = "want_diff";
+             }
+        }
+     }
+     close $fh;
+
+     # Add the image to an array of images.
+     push @images, \@pixels;
+     my $n = 0;
+     my $total = 0;
+     for (my $i=0; $i < 64; ++$i) {
+         if ($diffs[$i] > 2) {
+             $n += 1;
+             $total += $pixels[$i];
+         }
+     }
+     if (!exists $stats{$height}) {
+         $stats{$height} = [];
+     }
+
+     # Add a record.
+     push @{$stats{$height}}, [
+         $heights[$#heights] / 100.0,  # Current height in M.
+         $target_temp, # The known temperature of the object. 
+         $n,  # Number of readings.
+         $total,  # Sum of temperatures.
+         $total / $n, # Average temperature of each pixel.
+         $target_temp -  $total / $n  # Difference between actual temperature
+         # and average of recorded temperatures.
+     ];
+#     printf "H=%d CM, target-pixels=%d, target-total=temp=%.1f,  target-av-temp=%.1f \n", 
+#         $heights[$#heights], $n, $total,  $total / $n;
+}
+
+
+foreach my $h (keys %stats) {
+    my $r = $stats{$h};
+    my $n = @$r;
+    if ($n > 1) {
+        for (my $i=1; $i < $n; ++$i)  {
+            for (my $j=1; $j < 6; ++$j) {
+                # print "   [$i, $j] $r->[0][$j] +=  $r->[$i][$j]\n";
+                $r->[0][$j] += $r->[$i][$j];
+            }
+        }
+        for (my $j=1; $j < 6; ++$j) {
+            $r->[0][$j] /= $n;
+            # print "   [0, $j]= $r->[0][$j]\n";
+        }
+    }
+}
+
+
+# Helper function to allow data records topo be sorted by height.
+sub sort_helper_compare_height {
+    return $a <=> $b;
+}
+
+
+# Generate stats file.
+my $fh = new FileHandle "> ${output_dir}/sensor-height-features.csv";
+foreach my $key (sort sort_helper_compare_height keys  %stats) {
+    my $rec = $stats{$key}[0];
+
+    # Skip records with known bad data.
+    next if $rec->[0] == "1.9" && $rec->[1] == 4;
+
+    printf $fh "%0.2f,%0.1f,%d,%.1f,%.1f,%.1f\n", $rec->[0], $rec->[1], 
+        $rec->[2], $rec->[3], $rec->[4], $rec->[5];
+}
+close $fh;
+

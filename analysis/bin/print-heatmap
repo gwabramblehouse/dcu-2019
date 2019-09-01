@@ -1,0 +1,27 @@
+#!/usr/bin/python3
+#############################################################################
+# Home Mobility Monitor
+#
+# Generate a heatmap file from supplied data file.
+#############################################################################
+
+import argparse
+import matplotlib.pyplot as plt
+import numpy as np
+font = {'family' : 'normal',
+        'size'   : 20}
+plt.rc('font', **font)
+parser = argparse.ArgumentParser(description='Generate heatmap from CSV file')
+parser.add_argument('-i', '--data_file', help = 'Name of CSV data file', type = str)
+parser.add_argument('-o', '--image_file', help = 'Name of image file to create', type = str)
+parser.add_argument('-l', '--legend',default = "Degrees Celsius",  help = 'Chart legend', type = str)
+parser.add_argument('-t', '--title', help = 'Chart title', type = str)
+args = parser.parse_args()
+a = np.genfromtxt(args.data_file, delimiter=",")
+fig = plt.figure()
+plt.imshow(a, cmap='inferno', interpolation='nearest')
+cb = plt.colorbar()
+cb.set_label(args.legend)
+plt.suptitle(args.title)
+#plt.show()
+fig.savefig(args.image_file)

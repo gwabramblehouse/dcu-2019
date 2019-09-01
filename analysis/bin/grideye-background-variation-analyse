@@ -1,0 +1,24 @@
+#!/bin/bash
+#############################################################################
+# Home Mobility Monitoring.
+#
+# Generate heatmaps of per-pixel statistics for fluctuations in measurements
+# of a consistent background.
+#############################################################################
+
+export HMM_HOME=${HMM_HOME:$HOME/hmm}
+bin_dir="${HMM_HOME}/bin"
+data_dir="${HMM_HOME}/var/data"
+input_dir="${HMM_HOME}/var/data/processed"
+output_dir="${HMM_HOME}/var/data/reports"
+mkdir -p ${output_dir}
+
+find ${data_dir}/raw/sensor_data/absent-1/centre-node/ -name "*grideye.txt"  | ${bin_dir}/grideye-background-variation-process-logs
+${bin_dir}/print-heatmap -i ${input_dir}/av_pixel.csv    -o ${output_dir}/av_pixel.png    -t "Average pixel value"
+${bin_dir}/print-heatmap -i ${input_dir}/blank_pixel.csv -o ${output_dir}/blank_pixel.png -t "Pixels with blank values"
+${bin_dir}/print-heatmap -i ${input_dir}/diff_pixel.csv  -o ${output_dir}/diff_pixel.png  -t "Range of pixel values" 
+${bin_dir}/print-heatmap -i ${input_dir}/inc_pixel.csv   -o ${output_dir}/inc_pixel.png   -t "Rise vs fall of pixel values" -l "Increases vs decreases"
+${bin_dir}/print-heatmap -i ${input_dir}/max_pixel.csv   -o ${output_dir}/max_pixel.png   -t "Max pixel value" 
+${bin_dir}/print-heatmap -i ${input_dir}/min_pixel.csv   -o ${output_dir}/min_pixel.png   -t "Min pixel value" 
+${bin_dir}/print-heatmap -i ${input_dir}/sd_pixel.csv    -o ${output_dir}/sd_pixel.png    -t "Standard deviation of pixel values"
+${bin_dir}/print-heatmap -i ${input_dir}/trend_pixel.csv -o ${output_dir}/trend_pixel.png -t "Change in pixel values over time" 

@@ -1,0 +1,17 @@
+#!/bin/bash
+#############################################################################
+# Home Mobility Monitoring
+#
+# Generate charts from measurements taken from a sensor node at various
+# heights over the human head analogue.
+#############################################################################
+export HMM_HOME=${HMM_HOME:$HOME/hmm}
+bin_dir=${HMM_HOME}/bin
+output_dir="${HMM_HOME}/var/data/reports"
+mkdir -p ${output_dir}
+
+data_filename="${HMM_HOME}/var/data/processed/sensor-height-features.csv}"
+cmd=${bin_dir}/sensor-height-features-plot -i "${data_filename}" -o "${repory_dir}/obj_heat_sig.png"   -l "Scalar"          -c 3 -t "Heat signature of object"
+cmd=${bin_dir}/sensor-height-features-plot -i "${data_filename}" -o "${output_dir}/obj_num_pixels.png" -l "Pixels"          -c 2 -t "Pixels occupied by object"
+cmd=${bin_dir}/sensor-height-features-plot -i "${data_filename}" -o "${output_dir}/obj_temp.png"       -l "Degrees Celsius" -c 4 -t "Reported object temperature"
+cmd=${bin_dir}/sensor-height-features-plot -i "${data_filename}" -o "${output_dir}/obj_temp_error.png" -l "Degrees Celsius" -c 5 -t "Object temperature error"

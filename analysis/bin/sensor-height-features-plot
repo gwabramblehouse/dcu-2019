@@ -1,0 +1,47 @@
+#!/usr/bin/python3
+#############################################################################
+# Home Mobility Monitoring
+#
+# Generate a chart from measurements taken from a sensor node at various
+# heights over the human head analogue.
+#############################################################################
+
+import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
+import numpy as np
+
+# Use slighlty larger font to create a small chart with legible text when
+# inserted into document.
+font = {'family' : 'normal',
+        'size'   : 18}
+plt.rc('font', **font)
+
+
+# Function for generating a trend curve.
+def func(x, a, b, c):
+    return a * np.exp(-b * x) + c
+
+
+parser = argparse.ArgumentParser(description='Generate chart from CSV file')
+parser.add_argument('-c', '--column', help = 'Data column of CSV data file', default=3, type = int)
+parser.add_argument('-i', '--data_file', help = 'Name of CSV data file', type = str)
+parser.add_argument('-o', '--image_file', help = 'Name of image file to create', type = str)
+parser.add_argument('-l', '--legend',default = "Degrees Celsius",  help = 'Chart legend', type = str)
+parser.add_argument('-t', '--title', help = 'Chart title', type = str)
+args = parser.parse_args()
+
+x = np.genfromtxt(args.data_file, delimiter=",", usecols=(0))
+y = np.genfromtxt(args.data_file, delimiter=",", usecols=(args.column))
+
+#x, y = a[1], a[0]
+plt.xlim(x.min() * 0.8, x.max()*1.1)
+plt.ylim(y.min() * 0.8, y.max()*1.1)
+fig = plt.figure()
+plt.xlabel('Sensor height above object (Metres)')
+plt.ylabel(args.legend)
+plt.scatter(x, y)
+plt.gcf().subplots_adjust(bottom=0.15)
+popt, pcov = curve_fit(func, x, y, maxfev=5000)
+plt.plot(x, func(x, *popt), 'r-')
+plt.suptitle(args.title)
+fig.savefig(args.image_file)
