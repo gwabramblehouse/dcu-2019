@@ -1,0 +1,402 @@
+#!/usr/bin/python3
+#####################################################################
+# Home Mobility Monitoring
+#
+# train_classififier
+# Attempt to train a classification model
+# Expect the following file layout
+#
+# $HMM_HOME/train/bin       : Scripts
+# $HMM_HOME/data/classified : Classified data images.
+# $HMM_HOME/data/reports    : When to place reports.
+######################################################################
+
+from keras import backend as K
+from keras import initializers
+from keras import optimizers
+from keras import regularizers
+from keras.callbacks import ModelCheckpoint
+from keras.layers import Conv2D, MaxPooling2D, BatchNormalization
+from keras.layers import Activation, Dropout, Flatten, Dense
+from keras.models import Sequential, load_model
+from keras.preprocessing.image import ImageDataGenerator
+import h5py
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import os
+import random
+import re
+import shutil
+from sklearn.metrics import classification_report, confusion_matrix
+import sys
+import time
+
+
+def parseBoolean(v):
+    return v.lower() in ("true", "yes", "y")
+
+
+now_secs = int(round(time.time()))
+HOME = os.path.expanduser("~")
+ACCURACY_THRESHOLD = float(os.getenv('ACCURACY_THRESHOLD','0.01'))
+HMM_HOME=os.getenv('HMM_HOME', HOME + '/hmm')
+BATCH_NORMALIZATION = parseBoolean(os.getenv('BATCH_NORMALIZATION', 'False'))
+BATCH_SIZE = int(os.getenv('BATCH_SIZE', '50'))
+DROPOUT_RATE = float(os.getenv('DROPOUT_RATE', '0.45'))
+NUM_EPOCHS = int(os.getenv('NUM_EPOCHS', '100'))
+IMAGE_HEIGHT = int(os.getenv('IMAGE_HEIGHT', '32'))
+IMAGE_WIDTH = int(os.getenv('IMAGE_WIDTH', '32'))
+INTERACTIVE = parseBoolean(os.getenv('INTERACTIVE', 'False'))
+NUM_KERNELS = int(os.getenv('NUM_KERNELS', '32'))
+OPTIMIZER = os.getenv('OPTIMIZER', 'sgd')
+REPORT_BASE_DIR = os.getenv('REPORT_BASE_DIR')
+SGD_LEARNING_RATE = float(os.getenv('SGD_LEARNING_RATE', '0.006'))
+SGD_MOMENTUM = float(os.getenv('SGD_MOMENTUM', '0.9'))
+SGD_NESTEROV = parseBoolean(os.getenv('SGD_NESTEROV', 'True'))
+TEST_ID = os.getenv('TEST_ID', str(now_secs))
+image_base_dir  =  HMM_HOME + '/var/data/classified'
+if K.image_data_format() == 'channels_first':
+    input_shape = (3, IMAGE_WIDTH, IMAGE_HEIGHT)
+else:
+    input_shape = (IMAGE_WIDTH, IMAGE_HEIGHT, 3)
+report_base_dir  =  HMM_HOME + '/var/data/reports'
+report_dir = os.path.join(report_base_dir,  TEST_ID)
+train_data_dir = os.path.join(image_base_dir, 'train')
+validation_data_dir = os.path.join(image_base_dir, 'validation')
+test_data_dir = os.path.join(image_base_dir, 'test')
+    
+# Assume that the name of each top-level sub-directory  in the training
+# directory is the name of a data category. Sort the list to fit 
+# expectations of classification report.
+    
+categories = [dirname for dirname in os.listdir(train_data_dir) if \
+    os.path.isdir(os.path.join(train_data_dir, dirname))]
+categories.sort()
+
+def setup():
+    
+    # Create a report directory to hold report, charts, model etc.
+    if not os.path.exists(report_dir):
+        os.makedirs(report_dir)
+    
+    # Copy file used to train.
+    shutil.copy(__file__, os.path.join(report_dir, "test.py"))
+    print(categories)
+    
+    print("BATCH_NORMALIZATION=" + str(BATCH_NORMALIZATION))
+    print("BATCH_SIZE={0}".format(BATCH_SIZE))
+    print("DROPOUT_RATE={0:0.03f}".format(DROPOUT_RATE))
+    print("NUM_EPOCHS={0}".format(NUM_EPOCHS))
+    print("IMAGE_HEIGHT={0}".format(IMAGE_HEIGHT))
+    print("IMAGE_WIDTH={0}".format(IMAGE_WIDTH))
+    print("INTERACTIVE=" + str(INTERACTIVE))
+    print("NUM_KERNELS={0}".format(NUM_KERNELS))
+    print("OPTIMIZER={0}".format(OPTIMIZER))
+    print("REPORT_BASE_DIR={0}".format(REPORT_BASE_DIR))
+    print("SGD_LEARNING_RATE={0}".format(SGD_LEARNING_RATE))
+    print("SGD_MOMENTUM={0:0.04}".format(SGD_MOMENTUM))
+    print("SGD_NESTEROV={0}".format(str(SGD_NESTEROV)))
+    print("image_base_dir={0}".format(image_base_dir))
+    print("report_dir={0}".format(report_dir))
+    print("test_data_dir={0}".format(test_data_dir))
+    print("train_data_dir={0}".format(train_data_dir))
+    print("validation_data_dir={0}".format(validation_data_dir))
+
+
+def count_files(path, suffix):
+    n = 0
+    for root, dirs, filenames in os.walk(path):
+        for filename in filenames:
+            print("count_files:" + filename)
+            cur_suffix = os.path.splitext(filename)[-1]
+            if suffix == cur_suffix:
+                n += 1
+    return n
+
+
+"""
+Obtains a list of files in a directory tree that have a specific suffix
+batch size.
+"""
+def list_files(path, suffix, max_files, random_order=False):
+    n = 0
+    files = list()
+
+    for root, dirs, filenames in os.walk(path):
+        if random_order:
+            random.shuffle(filenames)
+
+        for filename in filenames:
+            if n >= max_files:
+                break
+            cur_suffix = os.path.splitext(filename)[-1]
+            if suffix == cur_suffix and ".dup." not in filename:
+                n += 1
+                files.append(os.path.join(root, filename))
+
+    return files
+
+
+"""
+Duplicates test files so the total number will be a  multiple of the
+batch size.
+"""
+def dup_files(path, suffix, max_files):
+    ts = millis = int(round(time.time() * 1000))
+    if max_files > 0:
+        filenames = list_files(path, suffix, max_files, True)
+
+        for filename in filenames:
+            duplicate_file = "{0}.dup.{1:0}{2}".format(filename, ts, suffix)
+            shutil.copy(filename, duplicate_file)
+
+
+"""
+Want the number of image files in a directory to be a multiple of the batch size
+so add duplicates if necessary.
+"""
+def make_files_multiple_of_batch_size(image_dir, batch_size):
+    n = count_files(image_dir, ".jpg")
+    remainder = n % BATCH_SIZE
+    if remainder != 0:
+        n_dup =  BATCH_SIZE - remainder
+        dup_files(image_dir, ".jpg", n_dup)
+    else:
+        n_dup = 0
+    print("{0:4} {1:2} {2:2} JPG files in {3}".format(n, remainder, n_dup, image_dir))
+    return n + n_dup
+
+
+"""
+Create a model to train with labelled image data
+"""
+def createModel():
+    model = Sequential()
+    model.add(Conv2D(32, (3, 3), activation = 'relu', input_shape = input_shape))
+    # 30x30
+    model.add(MaxPooling2D((2, 2))) # 15x15
+    model.add(Conv2D(64, (3, 3), activation = 'relu')) # 13x13
+    if BATCH_NORMALIZATION:
+        model.add(BatchNormalization())
+    model.add(MaxPooling2D((2, 2))) # 6x6
+    model.add(Conv2D(128, (3, 3), activation = 'relu')) # 4x4
+    if BATCH_NORMALIZATION:
+        model.add(BatchNormalization())
+    model.add(MaxPooling2D((2, 2))) # 2x2
+    model.add(Flatten())
+    model.add(Dense(64, activation='relu'))
+    if BATCH_NORMALIZATION:
+        model.add(BatchNormalization())
+    model.add(Dense(5, activation='softmax'))
+
+    return model
+
+
+"""
+Create an optimizer
+"""
+def createOptimizer():
+    if OPTIMIZER == "sgd":
+        optimizer = optimizers.SGD(lr = SGD_LEARNING_RATE, momentum = SGD_MOMENTUM, 
+        nesterov = SGD_NESTEROV)
+    else:
+        optimizer = optimizers.RMSprop(1e-4)
+    return optimizer
+    
+
+
+"""
+Verify the reported accuracy of the model by checking a prediction report
+generated from it. Each line is of the format <path to image file>,
+<predicted class>. The predicted class should match the top-level directory
+name.
+"""
+def verify_accuracy(reported_accuracy, test_report_file):
+    pat = '^(([a-zA-Z0-9_-]+)[/][^,]+),([a-zA-Z0-9_-]+)$'
+    num_pass = 0
+    num_fail = 0
+
+    fh = open(test_report_file, "r")
+    next(fh) # Skip header line in test report
+
+    for line in fh:
+       # For each line in test report, compare the folder name (eg "absent") 
+       # against the predicted classification (eg "absent").
+       # eg: absent/aft-node.1566910224.grideye.jpg,absent
+       match = re.match(pat, line)
+       if match:
+           if match.group(2) == match.group(3):
+               num_pass += 1
+           else:
+               print("Mis-match: predicted {0:10} for {1}".format(match.group(3),  match.group(1)))
+               num_fail += 1
+    
+       else:
+           print("Search failed for line {0}".format(line))
+    
+    fh.close()
+    
+    num_tests = num_pass + num_fail
+    if num_tests < 1:
+        print("No test results to verify!")
+        return False
+    
+    calculated_accuracy = float(num_pass) / float(num_tests)
+    accuracy_diff = abs(reported_accuracy - calculated_accuracy)
+    if accuracy_diff > ACCURACY_THRESHOLD:
+        print("Difference between reported accuracy {0:.03f} and detected accuracy {0:.03f} exceeds tolerance".format(reported_accuracy, calculated_accuracy))
+        return False
+    
+    print("Difference between reported accuracy {0:.03f} and detected accuracy {0:.03f} within tolerance".format(reported_accuracy, calculated_accuracy))
+    return True
+
+    
+setup()
+
+# Will be using data generators which seem to require that the number of 
+# of samples is a multiple of the batch size. So duplicate some files at
+# random if necessary to ensure this is the case.
+nb_train_samples = make_files_multiple_of_batch_size(train_data_dir, BATCH_SIZE)
+nb_test_samples = make_files_multiple_of_batch_size(test_data_dir, BATCH_SIZE)
+nb_validation_samples = make_files_multiple_of_batch_size(validation_data_dir, BATCH_SIZE)
+
+
+## Prepare model.
+model = createModel()
+optimizer = createOptimizer()
+model.compile(loss = 'categorical_crossentropy',
+    optimizer = optimizer,
+    metrics=['accuracy'])
+
+report = os.path.join(report_dir, "result.txt")
+print("Epochs: %d" % (NUM_EPOCHS), file=open(report, "a"))
+print("Batch size: %d" % (BATCH_SIZE), file=open(report, "a"))
+print("Kernels: %d" % (NUM_KERNELS), file=open(report, "a"))
+print("Optimizer: %s" % (OPTIMIZER), file=open(report, "a"))
+print("Dropout rate: %0.0f%%" % (DROPOUT_RATE * 100), file=open(report, "a"))
+print("Batch normalization: %s\n" % (BATCH_NORMALIZATION), file=open(report, "a"))
+
+with open(report,'a') as fh:
+    model.summary(print_fn=lambda x: fh.write(x + '\n'))
+
+ts_start = time.time()
+
+# This is the augmentation configuration we will use for training
+train_datagen = ImageDataGenerator(
+   rescale=1. / 255,
+   rotation_range=40,
+#  width_shift_range=0.1,
+#  height_shift_range=0.1,
+   shear_range=0.1,
+#  zoom_range=0.1,
+   horizontal_flip=True,
+#  fill_mode='nearest')
+)
+
+# this is the augmentation configuration we will use for testing:
+# only rescaling
+test_datagen = ImageDataGenerator(rescale = 1./255)
+
+train_generator = train_datagen.flow_from_directory(
+    train_data_dir,
+    target_size = (IMAGE_WIDTH, IMAGE_HEIGHT),
+    batch_size = BATCH_SIZE,
+    class_mode = 'categorical')
+
+validation_generator = test_datagen.flow_from_directory(
+    validation_data_dir,
+    target_size = (IMAGE_WIDTH, IMAGE_HEIGHT),
+    batch_size = BATCH_SIZE,
+    class_mode = 'categorical')
+
+test_generator = test_datagen.flow_from_directory(
+    test_data_dir,
+    target_size = (IMAGE_WIDTH, IMAGE_HEIGHT),
+    batch_size = BATCH_SIZE,
+    shuffle = False, # Important or confusion matrix will not make sense.
+    seed  =51,
+    class_mode = 'categorical')
+
+
+# Train the model.
+history = model.fit_generator(
+    train_generator,
+    steps_per_epoch = nb_train_samples // BATCH_SIZE,
+    epochs = NUM_EPOCHS,
+    validation_data = validation_generator,
+    validation_steps = nb_validation_samples // BATCH_SIZE,
+    callbacks = [ModelCheckpoint(os.path.join(report_dir, 'model.h5'))])
+
+print('Fitting model took', int(time.time()-ts_start), ' seconds', file=open(report, "a"))
+
+
+
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+_epochs = range(1, len(history.history['loss']) + 1)
+
+# Create a chart of validation loss over epochs.
+plt.plot(_epochs, history.history['loss'])
+plt.plot(_epochs, history.history['val_loss'])
+plt.title('Validation Loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend(['train', 'test'], loc='upper left')
+fig=plt.gcf()
+fig.savefig(os.path.join(report_dir, "training_and_validation_loss.png"))
+if INTERACTIVE == True:
+    plt.show()
+
+plt.clf()
+
+# Create a chart of validation accuracy over epochs.
+_epochs = range(1, len(history.history['acc']) + 1)
+
+plt.plot(_epochs, history.history['acc'])
+
+plt.plot(_epochs, history.history['val_acc'])
+plt.title('Validation Accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend(['train', 'test'], loc='upper left')
+fig=plt.gcf()
+fig.savefig(os.path.join(report_dir, "training_and_validation_accuracy.png"))
+if INTERACTIVE == True:
+    plt.show()
+
+# Test the model's accuracy.
+results = model.evaluate_generator(test_generator,  nb_test_samples // BATCH_SIZE, workers = 1)
+print("Test: %s: %.2f%%\n" % (model.metrics_names[1], results[1]*100), file=open(report, "a"))
+print(results)
+
+test_generator.reset()
+Y_pred = model.predict_generator(test_generator, nb_test_samples // BATCH_SIZE , verbose = 1)
+print(Y_pred)
+y_pred = np.argmax(Y_pred, axis=1)
+
+labels = (train_generator.class_indices)
+labels = dict((v,k) for k,v in labels.items())
+predictions = [labels[k] for k in y_pred]
+filenames = test_generator.filenames
+df_results=pd.DataFrame({"Filename":filenames, "Predictions":predictions})
+results_file = os.path.join(report_dir, "results.csv")
+df_results.to_csv(results_file, index = False)
+
+# Be paranoid and independently confirm the accuracy reported by the model.
+verify_accuracy(results[1], results_file) 
+
+# Save the model for later use.
+model.save(os.path.join(report_dir, "classify.model"))
+
+
+print("\nConfusion Matrix", file=open(report, "a"))
+print(confusion_matrix(test_generator.classes, y_pred, [0, 1, 2, 3, 4]), file=open(report, "a"))
+
+print(classification_report(test_generator.classes, y_pred, target_names=categories),file=open(report, "a"))
+
+f = open(report, "r")
+text = f.read()
+print(text)
+f.close()
+print("REPORT DIR:" + report_dir)

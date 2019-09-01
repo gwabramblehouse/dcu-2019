@@ -1,0 +1,107 @@
+#!/usr/bin/perl
+#############################################################################
+# Home Mobility Monitoring
+#
+# Convert a text 8x8 representation of a GridEye thermal image into a
+# 32x32 jpeg file. Use the imagemagick library to 
+#
+# Parse the text file containing the logged data for the GridEye image
+# - Pick up statistics such as min, medial and max pixel value.
+# - Read the pixel data (whioch starts on the line following '# IMAGE'
+# - If the difference between the minimal and maximum pixels is < 3 (degrees)
+#   and the log file path name does not contain "absent", assume the image
+#   is devoid of content and ignore it. This mitigates against images which
+#   should contain foreground images but do not (a matter of sensor 
+#   misalignment or actor or object not being in field of view).
+# - Set all pixels which are within 1 of the minimal pixel value to zero in
+#   order to remove much of the background (which is volatile anyway).
+# - Rescale 0-63 to 0-255 to increase contrast.
+# - Save the image as a 32x32 jpeg letting ImageMagick do the scaling.
+#############################################################################
+use strict;
+use Image::Magick;
+use FileHandle;
+
+my $input_filename=$ARGV[0];
+my $output_filename=$ARGV[1];
+my $tmp_filename="/tmp/image.$$.jpg";
+unlink  $tmp_filename;
+
+# printf "output = $output_filename\n";
+my $min_pixel = 13;
+my $median_pixel = 13;
+my $max_pixel = 13;
+
+my $mode="wait_image";
+my @image;
+my $fh = new FileHandle $input_filename;
+if ($fh) {
+    while (<$fh>) {
+        chomp;
+        if (/# MIN_PIXEL=([0-9.]+)/) {
+            $min_pixel = $1;
+        }
+        if (/# MEDIAN_PIXEL=([0-9.]+)/) {
+            $median_pixel = $1;
+            if ($min_pixel eq "0.0") {
+                $min_pixel = $median_pixel;
+            }
+        }
+        if (/# MAX_PIXEL=([0-9.]+)/) {
+            $max_pixel = $1;
+        }
+        if ($mode eq 'wait_image') {
+            if (/^# IMAGE/) {
+                $mode = 'image';
+                @image=();
+            }
+        } elsif ($mode eq 'image') {
+            if (/^\s*$/) {
+                $mode = 'post_image';
+            } else {
+                push @image, $_;
+            }
+        }
+    }
+    close $fh;
+}
+if ($input_filename !~ /absent/) {
+    if ($max_pixel - $min_pixel < 3) {
+        printf "*** SKIP $input_filename as pixel diff too small %d\n", $max_pixel - $min_pixel;
+        exit 0;
+    }
+}
+my $image  =  Image::Magick->new;
+$image->Set(size => '8x8');
+$image->ReadImage('xc:black');
+$image->Quantize(colorspace=>'gray');
+
+
+my $y = 0;
+for my $row (@image) {
+##    print "row: $row\n";
+    my @pixels = split(" ", $row);
+    my $x = 0;
+    foreach my $pixel (@pixels) {
+        # To remove most background noise, set the values of pixels
+        # that are within 2 degrees Celsius of the lowest recorded
+        # temperature in the image to zero.
+        if ($pixel <= $min_pixel + 1) {
+            $pixel = 0;
+        }
+        # Expand the range of values (degrees Celsius) from 0-63 to 4 times
+        # that.
+         if ($pixel > 63) {
+             $pixel = 63;
+         }
+        $pixel = ($pixel * 4) / 256.0;
+        $image->SetPixel(x => $x, y => $y, color => [$pixel, $pixel, $pixel]);
+
+        ++$x;
+    }
+    $y++;
+##    print "\n";
+}
+my $rv = $image->Write(filename => $tmp_filename);
+system "convert -quality 100 -resize 32x32 $tmp_filename $output_filename";
+warn $rv if $rv;

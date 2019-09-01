@@ -1,0 +1,89 @@
+#!/bin/bash
+##############################################################################
+# Home Mobility Monitoring
+#
+# Creates a subset of captured data to train a model to classify a number of
+# scenes.
+##############################################################################
+set -u
+set -e
+# Need imagemagic, if not already present
+# sudo  apt-get install imagemagick perlmagick
+
+export HMM_HOME=${HMM_HOME:-$HOME/hmm}
+
+SRC_DIR=${HMM_HOME}/var/data/recorded/sensor-data
+DST_DIR=${HMM_HOME}/var/data/classified
+rm -Rf ${DST_DIR}
+mkdir -p ${DST_DIR}
+
+# Images were captured from test runs and placed in directories.
+# The name of each directory reflects the content of the test images.
+# Select a number of test run data directories and map them to a more 
+# generic set of scenes.
+declare -A map_dir_to_category=(\
+[heatlamp-1]=heatlamp \
+[heatlamp-2]=heatlamp \
+[heatlamp-3]=heatlamp \
+[actor4-abasent-1]=absent \
+[actor4-absent-2]=absent \
+[actor4-absent-3]=absent \
+[actor4-prone-1]=prone \
+[actor4-prone-2]=prone \
+[actor4-prone-3]=prone \
+[actor4-sitting-1]=sitting \
+[actor4-sitting-2]=sitting \
+[actor4-sitting-3]=sitting \
+[actor4-sitting-4]=sitting \
+[actor4-stand-1]=standing \
+[actor4-stand-2]=standing \
+[actor4-stand-3]=standing)
+
+
+# Process each directory of test images.
+for dir in "${!map_dir_to_category[@]}"; do
+    category="${map_dir_to_category[$dir]}"
+
+    # Only want GridEye data files so skip visual camera images.
+    # Also skip data from the port sensor node as it was some distance from
+    # the other sensor nodes and will contain a number of partial or even
+    # blank scenes. Create a randomized list of image files.
+
+    find ${SRC_DIR}/${dir} -name "*.grideye.txt" | egrep -v 'port-node' | sort -R > /tmp/files.txt
+
+    # Work out how many file from the current directory should be assigned to
+    # each data set.  Will start off with a test data set, then work out the
+    # processing offsets for switching to the other data sets.
+    num_files=$(wc -l /tmp/files.txt | awk '{print $1}')
+    if [[ ${num_files} -gt 0 ]]; then
+        test_num=$(( num_files / 10 ))
+        validation_num=$(( (num_files * 3) / 20))
+        printf "test_num %d validation_num %d\n" $test_num $validation_num
+        validation_offset=$((test_num))
+        training_offset=$((test_num + validation_num))
+        printf "num_files %d validation_offset %d training_offset %d\n" \
+            $num_files $validation_offset $training_offset
+    fi
+
+    # Assign each image from the current test image directory to a training, 
+    # validation or test data set.
+    n=0
+    data_set="test"
+    while read -r src_file; do
+        filename=$(basename ${src_file})
+        filename="${filename%.*}.jpg"
+        dst_file="${DST_DIR}/${data_set}/${category}/$filename"
+        mkdir -p $(dirname ${dst_file})
+        (( n += 1))
+        #echo "$n $src_file -> $dst_file"
+
+        # Switch data set as appropriate.
+        if [[ $n -eq $validation_offset ]]; then
+            data_set="validation"
+        elif [[ $n -eq $training_offset ]]; then
+            data_set="train"
+        fi
+        # echo "$src_file -> $dst_file"
+        ${HMM_HOME}/train/bin/convert-grideye-to-jpeg ${src_file} ${dst_file}
+    done  < /tmp/files.txt
+done
