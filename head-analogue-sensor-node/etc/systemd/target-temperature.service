@@ -1,0 +1,14 @@
+[Unit]
+Description=Record target temperature.
+After=network.target
+Requires=network.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=30
+ExecStart=/opt/hmm/bin/log-target-temperature
+User=pi
+
+[Install]
+WantedBy=multi-user.target

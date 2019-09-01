@@ -1,0 +1,13 @@
+#!/bin/bash
+#############################################################################
+# Home Mobility Monitor
+#
+# Obtain and log the temperature of the top of the head analogue.
+#############################################################################
+while [ true ]; do
+    LOG_DIR=/opt/hmm/var/log/$(date +%Y-%m-%d)
+    mkdir -p ${LOG_DIR}
+    /opt/hmm/bin/get-target-temperature >> ${LOG_DIR}/target-temperature.log
+    sleep 20
+
+done
