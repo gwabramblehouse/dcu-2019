@@ -1,0 +1,27 @@
+#!/bin/bash
+#############################################################################
+# Home Mobility Monitor.
+#
+# Runs a distributed test.
+# Copies config and scripts from a central sensor node to the other sensor
+# nodes. Then starts the test run on each node.
+#############################################################################
+HMM_HOME=${HMM_HOME:-/opt/hmm}
+cd ${HMM_HOME}
+source etc/proj.conf
+
+# Copy the test config and scripts to the other sensor nodes.
+for node in 51 52 54 55; do
+    HOST=172.17.16.${node}
+    rsync -az etc bin ${HOST}:${HMM_HOME}
+done
+
+# Start the test on each sensor node.
+for node in 51 52 53 54 55; do
+    HOST=172.17.16.${node}
+    ssh $HOST "${HMM_HOME}/bin/run-test" &
+done
+# Wait until the test completes, then display message to that effect.
+sleep 10 
+sleep ${NUM_IMAGES}
+echo "***************************** Done?"

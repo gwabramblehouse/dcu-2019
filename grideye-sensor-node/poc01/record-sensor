@@ -1,0 +1,4 @@
+#!/bin/bash
+DIR=/home/pi/proj/poc01
+mkdir -p $DIR/logs
+$DIR/test2.py >> $DIR/logs/sensor-data.log

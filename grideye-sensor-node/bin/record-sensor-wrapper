@@ -1,0 +1,29 @@
+    Copies a subset of raw sensor data into a classified folder
+#!/bin/bash
+#############################################################################
+# Home Mobility Monitor
+#
+# Early script to capture GridEye and PI camera data.
+#############################################################################
+function on_error() {
+   printf "$0: Error detected\n"
+   exit 1
+}
+HMM_HOME=${HMM_HOME:-/opt/hmm}
+cd ${HMM_HOME}
+source ${HMM_HOME}/etc/proj.conf
+cat ${HMM_HOME}/etc/proj.conf
+pkill -9 -f camera.py
+trap on_error ERR
+DATE=$(date +%Y-%m-%d)
+HOSTNAME=$(hostname)
+TS=$(date +%Y-%m-%d-%H:%M:%S)
+LOG_DIR=./var/log/${TAG}/$DATE
+mkdir -p ${LOG_DIR}
+# Get temperature of head analogue.
+### TARGET_TEMP=$(ssh 172.17.16.60 "tail -1 /opt/gwa/var/log/2019-08-15/target-temperature.log" 2>/dev/null | awk '{print $4}')
+#TARGET_TEMP=31
+printf "TAG=%s\nTS=%s\nHOSTNAME=%s\nHEIGHT=%s\nTARGET_TEMP=%s\nBACKGROUND_TEMP=%s\n\n" \
+    "$TAG" "$TS" "$HOSTNAME" "$HEIGHT" "$TARGET_TEMP" "$BACKGROUND_TEMP" > ${LOG_DIR}/${HOSTNAME}.height.${HEIGHT}.${TS}.data.log
+./bin/record-sensor >> ${LOG_DIR}/${HOSTNAME}.height.${HEIGHT}.${TS}.data.log
+./bin/record-photo    ${LOG_DIR}/${HOSTNAME}.height.${HEIGHT}.${TS}.photo.jpg

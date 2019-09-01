@@ -1,0 +1,19 @@
+#!/bin/bash
+#############################################################################
+# Home Mobility Monitor
+#
+# Starts a test on the current sensor node.
+#############################################################################
+set +e
+export HMM_HOME=${HMM_HOME:-/opt/hmm}
+
+# Kill camera scripts just in case any are running.
+pkill -f -9 camera
+
+cd ${HMM_HOME}
+# Load configuration (sets environment variables).
+source etc/proj.conf
+
+# Run the test.
+bin/record-grideye-and-camera -n ${NUM_IMAGES} -t "${TAG}" >> ${HMM_HOME}/var/log/cur-test.log
+

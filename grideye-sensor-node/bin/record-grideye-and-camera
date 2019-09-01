@@ -1,0 +1,135 @@
+#!/usr/bin/python3
+#############################################################################
+# Home Mobility Monitor
+#
+# Records one PI camera and one GridEye sensor image each second for the
+# specified duration. Images are logged to 
+#     ${HMM_BASE}/var/log/${test_tag}/${sensor_node}/${start_time_secs}
+# Image file names:
+#    ${sensor_node}.${time_secs}.grideye.txt
+#    ${sensor_node}.${time_secs}.camera.jpg
+#############################################################################
+import adafruit_amg88xx
+import argparse
+import board
+import busio
+import copy
+import numpy as np
+import os
+from picamera import PiCamera
+import socket
+import sys
+import time
+
+hostname=socket.gethostname()
+HMM_HOME=os.getenv('HMM_HOME', default='/opt/hmm')
+parser = argparse.ArgumentParser(description='Record-session. Prog -t good-test -n 10 -r 120x9')
+parser.add_argument('-n', '--num_images',default=60,  help = 'Number of images to take (1 per sec, default is 60)', type=int)
+parser.add_argument('-r', '--resolution', help = 'Camera resolution widthXheight', type=str)
+parser.add_argument('-t', '--tag', required=True, help = 'Tag of text', type=str)
+parser.add_argument('-v', '--verbose', action = 'store_true', help = 'Tag of text')
+
+args = parser.parse_args()
+i2c = busio.I2C(board.SCL, board.SDA)
+amg = adafruit_amg88xx.AMG88XX(i2c)
+camera_res = None
+ticks = time.time()
+output = HMM_HOME + '/var/log/{0}/{1}/{2:.0f}'.format(args.tag, hostname, ticks)
+print('output_directory={0}'.format(output))
+
+if args.resolution:
+    camera_res = args.resolution.lower().split('x')
+    print('camera_resolution={0},{1}'.format(camera_res[0], camera_res[1]))
+
+pixels = np.zeros(shape=(64))
+print('args: output={0} num_images={1} resolution={2}'.format(output, args.num_images, args.resolution))
+camera = PiCamera()
+if camera_res:
+    camera.resolution = (int(camera_res[0]), int(camera_res[1]))
+# The shutter speed depends on lighting conditions. Want it bright enough to
+# detect the foreground image but dark enough so that background is dim as
+# an image segmentation aide.
+camera.shutter_speed = 80000
+time.sleep(2)
+if not os.path.exists(output):
+    os.makedirs(output)
+
+n=0
+#
+# The first GridEye image taken is always invalid so need to take
+# one more image than was asked for.
+
+for n in range(args.num_images + 1):
+    waited=0
+    text = ""
+    i = 0
+    pixels[:] = 0
+    ticks = time.time()
+    next_ticks = ticks + 0.999 
+    localtime = time.localtime(ticks)
+    max_pixel = 0
+    s=""
+
+    # GridEye installed on Raspberry PI3 is at 90 degrees to PI camera
+    # so adjust image orientation.
+    amgcopy = copy.deepcopy(amg.pixels)
+    rotated = zip(*amgcopy[::-1])
+    for row in rotated:
+        for pixel in row:
+            # Recover the odd invalid pixel.
+#            if pixel < 13:
+#                pixel = 13
+            pixels[i] = pixel
+            i += 1
+            s+=str('{0:.1f}'.format(pixel))
+            s+= " "
+        s+="\n"
+    if n > 0:
+        # Generate some stats as an aid for later debug and procesing.
+        max_pixel = np.amax(pixels) 
+        median_pixel = np.median(pixels) 
+        min_pixel = np.amin(pixels)
+        p10 = np.percentile(pixels, 10)
+        p90 = np.percentile(pixels, 90)
+
+        # Create a difference map for debug purposes: it shows the difference
+        # between each pixel and the lowest pixel value in the image. Pixels
+        # within 2 degrees of the lowest value are set to zero to make the
+        # pattern of a foregreound object more easily discernible.
+        pixels[:] =  [x - min_pixel for x in pixels]
+
+        ts = str('{0:4}-{1:02}-{2:02}-{3:02}:{4:02}:{5:02}'.format(
+            localtime[0], localtime[1], localtime[2], localtime[3], 
+            localtime[4], localtime[5]))
+        grideye_filename = "{0}/{1}.{2:.0f}.grideye.txt".format(output, 
+            hostname, ticks)
+        camera_filename = "{0}/{1}.{2:.0f}.camera.jpg".format(output, 
+            hostname, ticks)
+        camera.capture(camera_filename)
+        text += '# TS_TEXT={0}\n'.format(ts)
+        text += '# TS_SECS={0:.2f}\n'.format(ticks)
+        text += '# HOST={0}\n'.format(hostname)
+        text += '# PERCENTILE_10={0:.1f}\n'.format(p10)
+        text += '# PERCENTILE_90={0:.1f}\n'.format(p90)
+        text += '# MIN_PIXEL={0:.1f}\n'.format(min_pixel)
+        text += '# MEDIAN_PIXEL={0:.1f}\n'.format(median_pixel)
+        text += '# MAX_PIXEL={0:.1f}\n'.format(max_pixel)
+        text += '\n# IMAGE\n{0}\n\n# DIFF\n'.format(s)
+
+        for r in range(0,64,8):
+            text += "# {0:2.0f} {1:2.0f} {2:2.0f} {3:2.0f} {4:2.0f} {5:2.0f} {6:2.0f} {7:2.0f}\n".format(pixels[r], \
+                pixels[r+1], pixels[r+2], pixels[r+3], pixels[r+4], pixels[r+5], pixels[r+6], pixels[r+7])
+        # Log the GridEye sensor image.
+        with open(grideye_filename, 'w') as out:
+            out.write(text)
+        if args.verbose:
+            print(text)
+
+    while ticks < next_ticks:
+        waited += .02
+        time.sleep(0.02)
+        ticks = time.time()
+    n += 1
+    print("Waited {0:.03} secs".format(waited))
+
+
