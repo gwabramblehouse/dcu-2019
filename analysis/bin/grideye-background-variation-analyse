@@ -7,7 +7,7 @@
 #############################################################################
 
 export HMM_HOME=${HMM_HOME:$HOME/hmm}
-bin_dir="${HMM_HOME}/bin"
+bin_dir="${HMM_HOME}/analysis/bin"
 data_dir="${HMM_HOME}/var/data"
 input_dir="${HMM_HOME}/var/data/processed"
 output_dir="${HMM_HOME}/var/data/reports"

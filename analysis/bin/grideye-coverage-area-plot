@@ -1,5 +1,9 @@
 #!/usr/bin/python3
-
+#############################################################################
+# Home Mobility Monitoring
+#
+# Plot GridEye coverage.
+#############################################################################
 import argparse
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit

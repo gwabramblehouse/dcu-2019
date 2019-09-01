@@ -6,7 +6,7 @@
 #############################################################################
 
 export HMM_HOME=${HMM_HOME:-$HOME/hmm}
-bin_dir="${HMM_HOME}/bin"
+bin_dir="${HMM_HOME}/analysis/bin"
 input_dir="${HMM_HOME}/var/data/recorded"
 output_dir="${HMM_HOME}/var/data/reports"
 mkdir -p ${output_dir}
